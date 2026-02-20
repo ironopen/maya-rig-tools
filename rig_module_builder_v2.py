@@ -1,11 +1,13 @@
 """
-Rig Module Builder v2.1 (Maya)
+Rig Module Builder v2.2 (Maya)
 ------------------------------
 Upgrades in this version:
 1) Adaptive control sizing based on joint lengths (+ global size multiplier in UI)
 2) FK controls orient toward the next joint in chain when possible
 3) Basic parent/child module awareness via module metadata + automatic parenting
-4) Clear comments for learning and extension
+4) Better pole-vector placement using plane math
+5) Side auto-detection (L/R/C) + optional auto-mirror build
+6) Clear comments for learning and extension
 
 Run:
     import rig_module_builder_v2 as rmb
@@ -13,6 +15,7 @@ Run:
 """
 
 import maya.cmds as cmds
+import maya.api.OpenMaya as om
 
 WIN = "rigModuleBuilderV2Win"
 ROOT_GRP = "RMB_MODULES_GRP"
@@ -153,6 +156,73 @@ def adaptive_size(chain, factor=0.45, min_size=0.2, max_size=8.0):
         mul = cmds.floatSliderGrp("rmb_sizeMul", q=True, v=True)
     s = chain_avg_length(chain) * factor * mul
     return max(min_size, min(max_size, s))
+
+
+def detect_side_from_chain(chain):
+    """Infer side from joint names. Defaults to C if unknown."""
+    text = " ".join(chain).lower()
+    if "l_" in text or "_l" in text or "left" in text:
+        return "L"
+    if "r_" in text or "_r" in text or "right" in text:
+        return "R"
+    return "C"
+
+
+def opposite_side(side):
+    if side == "L":
+        return "R"
+    if side == "R":
+        return "L"
+    return "C"
+
+
+def mirrored_name(name):
+    swaps = [("L_", "R_"), ("_L", "_R"), ("left", "right"), ("Left", "Right")]
+    for a, b in swaps:
+        if a in name:
+            return name.replace(a, b)
+    swaps_rev = [("R_", "L_"), ("_R", "_L"), ("right", "left"), ("Right", "Left")]
+    for a, b in swaps_rev:
+        if a in name:
+            return name.replace(a, b)
+    return ""
+
+
+def mirrored_chain_by_name(chain):
+    out = []
+    for j in chain:
+        candidate = mirrored_name(j)
+        if not candidate or not cmds.objExists(candidate):
+            return []
+        out.append(candidate)
+    return out
+
+
+def _v(pos):
+    return om.MVector(pos[0], pos[1], pos[2])
+
+
+def compute_pv_position(upper, mid, lower, distance_scale=1.5):
+    """Plane-based pole vector position from 3-joint limb."""
+    p0 = _v(cmds.xform(upper, q=True, ws=True, t=True))
+    p1 = _v(cmds.xform(mid, q=True, ws=True, t=True))
+    p2 = _v(cmds.xform(lower, q=True, ws=True, t=True))
+
+    line = p2 - p0
+    line_len = max(line.length(), 0.001)
+    line_dir = line / line_len
+
+    proj_len = (p1 - p0) * line_dir
+    proj = p0 + line_dir * proj_len
+    arrow = p1 - proj
+
+    if arrow.length() < 0.001:
+        # fallback if chain is perfectly straight
+        arrow = om.MVector(0, 0, 1)
+
+    dist = max((p1 - p0).length(), (p2 - p1).length()) * distance_scale
+    pv = p1 + arrow.normal() * dist
+    return [pv.x, pv.y, pv.z]
 
 
 # ----------------
@@ -327,8 +397,8 @@ def build_ik(chain, side="L", part="arm", stretchy=True):
 
     pv = create_ctrl(f"{side}_{part}_PV_CTRL", shape="arrow", size=size*0.7, color=color)
     pv_z = make_zero(pv)
-    p = cmds.xform(mid, q=True, ws=True, t=True)
-    cmds.xform(pv_z, ws=True, t=(p[0], p[1], p[2] + size * 8.0))
+    pv_pos = compute_pv_position(upper, mid, lower, distance_scale=1.6)
+    cmds.xform(pv_z, ws=True, t=pv_pos)
     cmds.poleVectorConstraint(pv, ikh)
 
     module_id = f"{side}_{part}_IK"
@@ -465,44 +535,78 @@ def _sel3():
     return s
 
 
+def _auto_mirror_enabled():
+    return cmds.checkBox("rmb_autoMirror", exists=True) and cmds.checkBox("rmb_autoMirror", q=True, v=True)
+
+
 def cb_fk_arm(*_):
     s = _sel3()
     if s:
-        build_fk(s[:3], side="L", part="arm")
+        side = detect_side_from_chain(s[:3])
+        build_fk(s[:3], side=side, part="arm")
+        if _auto_mirror_enabled() and side in ("L", "R"):
+            m = mirrored_chain_by_name(s[:3])
+            if m:
+                build_fk(m, side=opposite_side(side), part="arm")
 
 
 def cb_ik_arm(*_):
     s = _sel3()
     if s:
+        side = detect_side_from_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
-        build_ik(s[:3], side="L", part="arm", stretchy=st)
+        build_ik(s[:3], side=side, part="arm", stretchy=st)
+        if _auto_mirror_enabled() and side in ("L", "R"):
+            m = mirrored_chain_by_name(s[:3])
+            if m:
+                build_ik(m, side=opposite_side(side), part="arm", stretchy=st)
 
 
 def cb_fkik_arm(*_):
     s = _sel3()
     if s:
+        side = detect_side_from_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
-        build_fkik(s[:3], side="L", part="arm", stretchy=st)
+        build_fkik(s[:3], side=side, part="arm", stretchy=st)
+        if _auto_mirror_enabled() and side in ("L", "R"):
+            m = mirrored_chain_by_name(s[:3])
+            if m:
+                build_fkik(m, side=opposite_side(side), part="arm", stretchy=st)
 
 
 def cb_fk_leg(*_):
     s = _sel3()
     if s:
-        build_fk(s[:3], side="L", part="leg")
+        side = detect_side_from_chain(s[:3])
+        build_fk(s[:3], side=side, part="leg")
+        if _auto_mirror_enabled() and side in ("L", "R"):
+            m = mirrored_chain_by_name(s[:3])
+            if m:
+                build_fk(m, side=opposite_side(side), part="leg")
 
 
 def cb_ik_leg(*_):
     s = _sel3()
     if s:
+        side = detect_side_from_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
-        build_ik(s[:3], side="L", part="leg", stretchy=st)
+        build_ik(s[:3], side=side, part="leg", stretchy=st)
+        if _auto_mirror_enabled() and side in ("L", "R"):
+            m = mirrored_chain_by_name(s[:3])
+            if m:
+                build_ik(m, side=opposite_side(side), part="leg", stretchy=st)
 
 
 def cb_fkik_leg(*_):
     s = _sel3()
     if s:
+        side = detect_side_from_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
-        build_fkik(s[:3], side="L", part="leg", stretchy=st)
+        build_fkik(s[:3], side=side, part="leg", stretchy=st)
+        if _auto_mirror_enabled() and side in ("L", "R"):
+            m = mirrored_chain_by_name(s[:3])
+            if m:
+                build_fkik(m, side=opposite_side(side), part="leg", stretchy=st)
 
 
 def cb_spine_fk(*_):
@@ -527,6 +631,17 @@ def cb_color(color):
         set_ctrl_color(n, color)
 
 
+def cb_mirror_name_hint(*_):
+    s = _sel3()
+    if not s:
+        return
+    m = mirrored_chain_by_name(s[:3])
+    if m:
+        cmds.inViewMessage(amg=f"Mirror chain found: <hl>{', '.join(m)}</hl>", pos='midCenterTop', fade=True)
+    else:
+        cmds.warning("Could not resolve mirrored chain by naming. Use L_/R_ or left/right naming.")
+
+
 # -----
 # UI
 # -----
@@ -535,15 +650,17 @@ def show_ui():
     if cmds.window(WIN, exists=True):
         cmds.deleteUI(WIN)
 
-    cmds.window(WIN, title="Rig Module Builder v2.1", sizeable=False, widthHeight=(400, 650))
+    cmds.window(WIN, title="Rig Module Builder v2.2", sizeable=False, widthHeight=(400, 680))
     cmds.columnLayout(adj=True, rs=8)
 
-    cmds.text(l="Rig Module Builder v2.1", fn="boldLabelFont", h=24)
-    cmds.text(l="Adaptive size + aiming + module hierarchy awareness")
+    cmds.text(l="Rig Module Builder v2.2", fn="boldLabelFont", h=24)
+    cmds.text(l="Adaptive size + aiming + hierarchy + side detect + auto mirror")
     cmds.separator(h=8, style="in")
 
     cmds.floatSliderGrp("rmb_sizeMul", l="Control Size Multiplier", field=True, min=0.2, max=3.0, v=1.0)
     cmds.checkBox("rmb_stretch", l="Enable Stretch for IK/FKIK", v=True)
+    cmds.checkBox("rmb_autoMirror", l="Auto Mirror Build (requires mirrored L/R chain names)", v=False)
+    cmds.button(l="Check mirrored chain for current selection", c=cb_mirror_name_hint)
 
     cmds.frameLayout(l="Arms", cl=False, mw=8, mh=8)
     cmds.rowLayout(nc=3, cw3=(130, 130, 130))
