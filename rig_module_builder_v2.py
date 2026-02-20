@@ -168,6 +168,15 @@ def detect_side_from_chain(chain):
     return "C"
 
 
+def get_side_for_chain(chain):
+    """Use UI override if set, otherwise auto-detect."""
+    if cmds.optionMenu("rmb_sideMode", exists=True):
+        mode = cmds.optionMenu("rmb_sideMode", q=True, v=True)
+        if mode in ("L", "R", "C"):
+            return mode
+    return detect_side_from_chain(chain)
+
+
 def opposite_side(side):
     if side == "L":
         return "R"
@@ -539,74 +548,95 @@ def _auto_mirror_enabled():
     return cmds.checkBox("rmb_autoMirror", exists=True) and cmds.checkBox("rmb_autoMirror", q=True, v=True)
 
 
+def ui_status(msg):
+    if cmds.text("rmb_statusText", exists=True):
+        cmds.text("rmb_statusText", e=True, l=f"Status: {msg}")
+    try:
+        cmds.inViewMessage(amg=f"<hl>{msg}</hl>", pos='topCenter', fade=True)
+    except Exception:
+        pass
+
+
 def cb_fk_arm(*_):
     s = _sel3()
     if s:
-        side = detect_side_from_chain(s[:3])
+        side = get_side_for_chain(s[:3])
         build_fk(s[:3], side=side, part="arm")
+        ui_status(f"Built FK Arm ({side})")
         if _auto_mirror_enabled() and side in ("L", "R"):
             m = mirrored_chain_by_name(s[:3])
             if m:
                 build_fk(m, side=opposite_side(side), part="arm")
+                ui_status(f"Built FK Arm ({side}) + mirrored {opposite_side(side)}")
 
 
 def cb_ik_arm(*_):
     s = _sel3()
     if s:
-        side = detect_side_from_chain(s[:3])
+        side = get_side_for_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
         build_ik(s[:3], side=side, part="arm", stretchy=st)
+        ui_status(f"Built IK Arm ({side})")
         if _auto_mirror_enabled() and side in ("L", "R"):
             m = mirrored_chain_by_name(s[:3])
             if m:
                 build_ik(m, side=opposite_side(side), part="arm", stretchy=st)
+                ui_status(f"Built IK Arm ({side}) + mirrored {opposite_side(side)}")
 
 
 def cb_fkik_arm(*_):
     s = _sel3()
     if s:
-        side = detect_side_from_chain(s[:3])
+        side = get_side_for_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
         build_fkik(s[:3], side=side, part="arm", stretchy=st)
+        ui_status(f"Built FK/IK Arm ({side})")
         if _auto_mirror_enabled() and side in ("L", "R"):
             m = mirrored_chain_by_name(s[:3])
             if m:
                 build_fkik(m, side=opposite_side(side), part="arm", stretchy=st)
+                ui_status(f"Built FK/IK Arm ({side}) + mirrored {opposite_side(side)}")
 
 
 def cb_fk_leg(*_):
     s = _sel3()
     if s:
-        side = detect_side_from_chain(s[:3])
+        side = get_side_for_chain(s[:3])
         build_fk(s[:3], side=side, part="leg")
+        ui_status(f"Built FK Leg ({side})")
         if _auto_mirror_enabled() and side in ("L", "R"):
             m = mirrored_chain_by_name(s[:3])
             if m:
                 build_fk(m, side=opposite_side(side), part="leg")
+                ui_status(f"Built FK Leg ({side}) + mirrored {opposite_side(side)}")
 
 
 def cb_ik_leg(*_):
     s = _sel3()
     if s:
-        side = detect_side_from_chain(s[:3])
+        side = get_side_for_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
         build_ik(s[:3], side=side, part="leg", stretchy=st)
+        ui_status(f"Built IK Leg ({side})")
         if _auto_mirror_enabled() and side in ("L", "R"):
             m = mirrored_chain_by_name(s[:3])
             if m:
                 build_ik(m, side=opposite_side(side), part="leg", stretchy=st)
+                ui_status(f"Built IK Leg ({side}) + mirrored {opposite_side(side)}")
 
 
 def cb_fkik_leg(*_):
     s = _sel3()
     if s:
-        side = detect_side_from_chain(s[:3])
+        side = get_side_for_chain(s[:3])
         st = cmds.checkBox("rmb_stretch", q=True, v=True)
         build_fkik(s[:3], side=side, part="leg", stretchy=st)
+        ui_status(f"Built FK/IK Leg ({side})")
         if _auto_mirror_enabled() and side in ("L", "R"):
             m = mirrored_chain_by_name(s[:3])
             if m:
                 build_fkik(m, side=opposite_side(side), part="leg", stretchy=st)
+                ui_status(f"Built FK/IK Leg ({side}) + mirrored {opposite_side(side)}")
 
 
 def cb_spine_fk(*_):
@@ -615,6 +645,7 @@ def cb_spine_fk(*_):
         cmds.warning("Select 3+ spine joints.")
         return
     build_spine(s, ik_spline=False)
+    ui_status("Built Spine FK")
 
 
 def cb_spine_ik(*_):
@@ -623,6 +654,7 @@ def cb_spine_ik(*_):
         cmds.warning("Select 3+ spine joints.")
         return
     build_spine(s, ik_spline=True)
+    ui_status("Built Spine IK Spline")
 
 
 def cb_color(color):
@@ -650,14 +682,28 @@ def show_ui():
     if cmds.window(WIN, exists=True):
         cmds.deleteUI(WIN)
 
-    cmds.window(WIN, title="Rig Module Builder v2.2", sizeable=False, widthHeight=(400, 680))
+    cmds.window(WIN, title="Rig Module Builder v2.3", sizeable=False, widthHeight=(420, 760))
     cmds.columnLayout(adj=True, rs=8)
 
-    cmds.text(l="Rig Module Builder v2.2", fn="boldLabelFont", h=24)
+    cmds.text(l="Rig Module Builder v2.3", fn="boldLabelFont", h=24)
     cmds.text(l="Adaptive size + aiming + hierarchy + side detect + auto mirror")
     cmds.separator(h=8, style="in")
 
+    cmds.frameLayout(l="Quick Start (Read Me First)", cl=False, mw=8, mh=8)
+    cmds.text(l="1) Select joints in order (root → tip)", align="left")
+    cmds.text(l="2) Pick side mode: Auto / L / R / C", align="left")
+    cmds.text(l="3) Build module (FK, IK, FK/IK, Spine)", align="left")
+    cmds.text(l="4) Optional: enable Auto Mirror for opposite side", align="left")
+    cmds.text(l="5) If controls are too big/small, adjust Size Multiplier", align="left")
+    cmds.setParent("..")
+
     cmds.floatSliderGrp("rmb_sizeMul", l="Control Size Multiplier", field=True, min=0.2, max=3.0, v=1.0)
+    cmds.optionMenu("rmb_sideMode", l="Side Mode")
+    cmds.menuItem(l="Auto")
+    cmds.menuItem(l="L")
+    cmds.menuItem(l="R")
+    cmds.menuItem(l="C")
+
     cmds.checkBox("rmb_stretch", l="Enable Stretch for IK/FKIK", v=True)
     cmds.checkBox("rmb_autoMirror", l="Auto Mirror Build (requires mirrored L/R chain names)", v=False)
     cmds.button(l="Check mirrored chain for current selection", c=cb_mirror_name_hint)
@@ -702,6 +748,7 @@ def show_ui():
 
     cmds.separator(h=10, style="in")
     cmds.text(l="Tip: Build parent module first, then child module for clean module parenting.")
+    cmds.text("rmb_statusText", l="Status: Ready", align="left")
 
     cmds.showWindow(WIN)
 
